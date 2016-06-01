@@ -9,7 +9,9 @@ var request    = require('supertest'),
     should     = require('should'),
 
     testUtils  = require('../../utils'),
-    ghost      = require('../../../../core');
+    ghost      = require('../../../../core'),
+    i18n       = require('../../../../core/server/i18n');
+i18n.init();
 
 describe('Admin Routing', function () {
     function doEnd(done) {
@@ -47,6 +49,7 @@ describe('Admin Routing', function () {
         }).catch(function (e) {
             console.log('Ghost Error: ', e);
             console.log(e.stack);
+            done(e);
         });
     });
 
@@ -85,16 +88,16 @@ describe('Admin Routing', function () {
         it('should redirect /signin/ to /ghost/', function (done) {
             request.get('/signin/')
                 .expect('Location', '/ghost/')
-                .expect('Cache-Control', testUtils.cacheRules.public)
-                .expect(302)
+                .expect('Cache-Control', testUtils.cacheRules.year)
+                .expect(301)
                 .end(doEndNoAuth(done));
         });
 
         it('should redirect /admin/ to /ghost/', function (done) {
             request.get('/admin/')
                 .expect('Location', '/ghost/')
-                .expect('Cache-Control', testUtils.cacheRules.public)
-                .expect(302)
+                .expect('Cache-Control', testUtils.cacheRules.year)
+                .expect(301)
                 .end(doEndNoAuth(done));
         });
 
