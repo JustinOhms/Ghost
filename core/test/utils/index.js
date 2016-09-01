@@ -2,11 +2,12 @@ var Promise       = require('bluebird'),
     _             = require('lodash'),
     fs            = require('fs-extra'),
     path          = require('path'),
+    Module        = require('module'),
     uuid          = require('node-uuid'),
     db            = require('../../server/data/db'),
     migration     = require('../../server/data/migration/'),
     fixtureUtils  = require('../../server/data/migration/fixtures/utils'),
-    Models        = require('../../server/models'),
+    models        = require('../../server/models'),
     SettingsAPI   = require('../../server/api/settings'),
     permissions   = require('../../server/permissions'),
     sequence      = require('../../server/utils/sequence'),
@@ -14,13 +15,17 @@ var Promise       = require('bluebird'),
     filterData    = require('./fixtures/filter-param'),
     API           = require('./api'),
     fork          = require('./fork'),
+    mocks         = require('./mocks'),
     config        = require('../../server/config'),
 
     fixtures,
     getFixtureOps,
     toDoList,
+    originalRequireFn,
     postsInserted = 0,
 
+    mockNotExistingModule,
+    unmockNotExistingModule,
     teardown,
     setup,
     doAuth,
@@ -33,7 +38,11 @@ var Promise       = require('bluebird'),
 
 /** TEST FIXTURES **/
 fixtures = {
-    insertPosts: function insertPosts() {
+    insertPosts: function insertPosts(posts) {
+        return Promise.resolve(db.knex('posts').insert(posts));
+    },
+
+    insertPostsAndTags: function insertPostsAndTags() {
         return Promise.resolve(db.knex('posts').insert(DataGenerator.forKnex.posts)).then(function () {
             return db.knex('tags').insert(DataGenerator.forKnex.tags);
         }).then(function () {
@@ -56,7 +65,7 @@ fixtures = {
         }).then(function () {
             return db.knex('users').select('id');
         }).then(function (results) {
-            authors = _.pluck(results, 'id');
+            authors = _.map(results, 'id');
 
             // Let's insert posts with random authors
             for (i = 0; i < max; i += 1) {
@@ -80,8 +89,8 @@ fixtures = {
                 db.knex('tags').select('id')
             ]);
         }).then(function (results) {
-            var posts = _.pluck(results[0], 'id'),
-                tags = _.pluck(results[1], 'id'),
+            var posts = _.map(results[0], 'id'),
+                tags = _.map(results[1], 'id'),
                 promises = [],
                 i;
 
@@ -157,10 +166,10 @@ fixtures = {
             db.knex('posts').orderBy('id', 'asc').select('id'),
             db.knex('tags').select('id', 'name')
         ]).then(function (results) {
-            var posts = _.pluck(results[0], 'id'),
+            var posts = _.map(results[0], 'id'),
                 injectionTagId = _.chain(results[1])
-                    .where({name: 'injection'})
-                    .pluck('id')
+                    .filter({name: 'injection'})
+                    .map('id')
                     .value()[0],
                 promises = [],
                 i;
@@ -228,6 +237,16 @@ fixtures = {
         });
     },
 
+    createUsersWithRolesWithoutOwner: function createUsersWithRolesWithoutOwner() {
+        var usersWithoutOwner = DataGenerator.forKnex.users.slice(1);
+
+        return db.knex('roles').insert(DataGenerator.forKnex.roles).then(function () {
+            return db.knex('users').insert(usersWithoutOwner);
+        }).then(function () {
+            return db.knex('roles_users').insert(DataGenerator.forKnex.roles_users);
+        });
+    },
+
     createExtraUsers: function createExtraUsers() {
         // grab 3 more users
         var extraUsers = DataGenerator.Content.users.slice(2, 5);
@@ -278,9 +297,9 @@ fixtures = {
         });
     },
 
-    insertOne: function insertOne(obj, fn) {
+    insertOne: function insertOne(obj, fn, index) {
         return db.knex(obj)
-           .insert(DataGenerator.forKnex[fn](DataGenerator.Content[obj][0]));
+           .insert(DataGenerator.forKnex[fn](DataGenerator.Content[obj][index || 0]));
     },
 
     insertApps: function insertApps() {
@@ -371,7 +390,7 @@ fixtures = {
 
 /** Test Utility Functions **/
 initData = function initData() {
-    return migration.init();
+    return migration.populate();
 };
 
 clearData = function clearData() {
@@ -398,15 +417,15 @@ toDoList = {
     roles: function insertRoles() { return fixtures.insertRoles(); },
     tag: function insertTag() { return fixtures.insertOne('tags', 'createTag'); },
     subscriber: function insertSubscriber() { return fixtures.insertOne('subscribers', 'createSubscriber'); },
-
-    posts: function insertPosts() { return fixtures.insertPosts(); },
+    posts: function insertPostsAndTags() { return fixtures.insertPostsAndTags(); },
     'posts:mu': function insertMultiAuthorPosts() { return fixtures.insertMultiAuthorPosts(); },
     tags: function insertMoreTags() { return fixtures.insertMoreTags(); },
     apps: function insertApps() { return fixtures.insertApps(); },
     settings: function populateSettings() {
-        return Models.Settings.populateDefaults().then(function () { return SettingsAPI.updateSettingsCache(); });
+        return models.Settings.populateDefaults().then(function () { return SettingsAPI.updateSettingsCache(); });
     },
     'users:roles': function createUsersWithRoles() { return fixtures.createUsersWithRoles(); },
+    'users:roles:no-owner': function createUsersWithRoles() { return fixtures.createUsersWithRolesWithoutOwner(); },
     users: function createExtraUsers() { return fixtures.createExtraUsers(); },
     'user:token': function createTokensForUser() { return fixtures.createTokensForUser(); },
     owner: function insertOwnerUser() { return fixtures.insertOwnerUser(); },
@@ -440,8 +459,9 @@ getFixtureOps = function getFixtureOps(toDos) {
     // Database initialisation
     if (toDos.init || toDos.default) {
         fixtureOps.push(function initDB() {
-            return migration.init(tablesOnly);
+            return migration.populate({tablesOnly: tablesOnly});
         });
+
         delete toDos.default;
         delete toDos.init;
     }
@@ -487,10 +507,10 @@ setup = function setup() {
         args = arguments;
 
     return function setup(done) {
-        Models.init();
+        models.init();
 
         if (done) {
-            return initFixtures.apply(self, args).then(function () {
+            initFixtures.apply(self, args).then(function () {
                 done();
             }).catch(done);
         } else {
@@ -513,6 +533,7 @@ doAuth = function doAuth() {
 
     // Remove request from this list
     delete options[0];
+
     // No DB setup, but override the owner
     options = _.merge({'owner:post': true}, _.transform(options, function (result, val) {
         if (val) {
@@ -528,7 +549,7 @@ doAuth = function doAuth() {
 };
 
 login = function login(request) {
-    var user = DataGenerator.forModel.users[0];
+    var user = DataGenerator.forModel.users[request.userIndex || 0];
 
     return new Promise(function (resolve, reject) {
         request.post('/ghost/api/v0.1/authentication/token/')
@@ -585,6 +606,25 @@ teardown = function teardown(done) {
     }
 };
 
+/**
+ * offer helper functions for mocking
+ * we start with a small function set to mock non existent modules
+ */
+originalRequireFn = Module.prototype.require;
+mockNotExistingModule = function mockNotExistingModule(modulePath, module) {
+    Module.prototype.require = function (path) {
+        if (path.match(modulePath)) {
+            return module;
+        }
+
+        return originalRequireFn.apply(this, arguments);
+    };
+};
+
+unmockNotExistingModule = function unmockNotExistingModule() {
+    Module.prototype.require = originalRequireFn;
+};
+
 module.exports = {
     teardown: teardown,
     setup: setup,
@@ -592,9 +632,14 @@ module.exports = {
     login: login,
     togglePermalinks: togglePermalinks,
 
+    mockNotExistingModule: mockNotExistingModule,
+    unmockNotExistingModule: unmockNotExistingModule,
+
     initFixtures: initFixtures,
     initData: initData,
     clearData: clearData,
+
+    mocks: mocks,
 
     fixtures: fixtures,
 

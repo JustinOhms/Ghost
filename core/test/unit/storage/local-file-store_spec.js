@@ -1,14 +1,13 @@
-/*globals describe, before, after, beforeEach, afterEach, it*/
 var fs              = require('fs-extra'),
     moment          = require('moment'),
     path            = require('path'),
     should          = require('should'),
     sinon           = require('sinon'),
     _               = require('lodash'),
-    LocalFileStore  = require('../../server/storage/local-file-store'),
+    LocalFileStore  = require('../../../server/storage/local-file-store'),
     localFileStore,
 
-    configUtils     = require('../utils/configUtils');
+    configUtils     = require('../../utils/configUtils');
 
 // To stop jshint complaining
 should.equal(true, true);
@@ -70,6 +69,15 @@ describe('Local File System Storage', function () {
         image.name = 'AN IMAGE.jpg';
         localFileStore.save(image).then(function (url) {
             url.should.equal('/content/images/2013/09/AN-IMAGE.jpg');
+
+            done();
+        }).catch(done);
+    });
+
+    it('should allow "@" symbol to image for Apple hi-res (retina) modifier', function (done) {
+        image.name = 'photo@2x.jpg';
+        localFileStore.save(image).then(function (url) {
+            url.should.equal('/content/images/2013/09/photo@2x.jpg');
 
             done();
         }).catch(done);
@@ -139,6 +147,35 @@ describe('Local File System Storage', function () {
 
             done();
         }).catch(done);
+    });
+
+    describe('validate extentions', function () {
+        it('name contains a .\d as extension', function (done) {
+            localFileStore.save({
+                name: 'test-1.1.1'
+            }).then(function (url) {
+                should.exist(url.match(/test-1.1.1/));
+                done();
+            }).catch(done);
+        });
+
+        it('name contains a .zip as extension', function (done) {
+            localFileStore.save({
+                name: 'test-1.1.1.zip'
+            }).then(function (url) {
+                should.exist(url.match(/test-1.1.1.zip/));
+                done();
+            }).catch(done);
+        });
+
+        it('name contains a .jpeg as extension', function (done) {
+            localFileStore.save({
+                name: 'test-1.1.1.jpeg'
+            }).then(function (url) {
+                should.exist(url.match(/test-1.1.1.jpeg/));
+                done();
+            }).catch(done);
+        });
     });
 
     describe('when a custom content path is used', function () {
